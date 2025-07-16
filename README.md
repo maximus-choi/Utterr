@@ -24,6 +24,43 @@ This project serves as a demo and example code showcasing how to implement a rea
 *   **Real-time Timeline Visualization**: Uses PyQt6 to display in real-time which speaker spoke when on a timeline.
 *   **Embedding Distribution Visualization**: Visualizes high-dimensional embeddings in 2D using PCA to show how speaker clusters are distributed.
 
+
+## 🛠 Installation and Usage
+
+### Requirements
+
+*   **Windows**: SoundCard's loopback functionality only works on Windows!
+*   **Python**: 3.10 or higher
+*   **Conda**
+
+### Installation Process
+
+1.  **Create and activate Conda environment**
+    ```bash
+    conda create -n rtt_env python=3.10
+    conda activate rtt_env
+    ```
+
+2.  **Install required packages**
+
+    It's recommended to install PyTorch according to your system environment (CUDA support).
+    *   **CPU version:**
+        ```bash
+        pip install torch torchaudio soundcard numpy PyQt6 scikit-learn matplotlib speechbrain
+        ```
+    *   **GPU (CUDA) version:** (if you have NVIDIA GPU)
+        Check the installation command for your CUDA version on the [PyTorch official website](https://pytorch.org/get-started/locally/).
+
+
+### Execution
+
+Run the program with the following command:
+```bash
+python rt_timeline.py
+```
+When the program starts, it will download the models. Once the "Ready - Press Start button to begin" message appears, click the "Start" button to begin real-time speaker diarization.
+
+
 ## ⚙️ How It Works
 
 The system processes audio streams by dividing them into short windows and sequentially processing them to identify speakers, operating like a sliding window approach.
@@ -102,38 +139,3 @@ The system processes audio streams by dividing them into short windows and seque
     *   When many speakers with similar voices are expected, `PENDING_THRESHOLD` and `AUTO_CLUSTER_DISTANCE_THRESHOLD` should be set low.
     *   However, this can cause a single speaker to be incorrectly promoted as multiple new speakers when their speech characteristics change slightly. The **reclustering** feature was added to correct such issues post-hoc.
 *   **Robustness**: Due to the above reasons, this is a demo version that is not perfectly 'robust' against various exceptional situations.
-
-## 🛠 Installation and Usage
-
-### Requirements
-
-*   **Windows**: SoundCard's loopback functionality only works on Windows!
-*   **Python**: 3.10 or higher
-*   **Conda**
-
-### Installation Process
-
-1.  **Create and activate Conda environment**
-    ```bash
-    conda create -n rtt_env python=3.10
-    conda activate rtt_env
-    ```
-
-2.  **Install required packages**
-
-    It's recommended to install PyTorch according to your system environment (CUDA support).
-    *   **CPU version:**
-        ```bash
-        pip install torch torchaudio soundcard numpy PyQt6 scikit-learn matplotlib speechbrain
-        ```
-    *   **GPU (CUDA) version:** (if you have NVIDIA GPU)
-        Check the installation command for your CUDA version on the [PyTorch official website](https://pytorch.org/get-started/locally/).
-
-
-### Execution
-
-Run the program with the following command:
-```bash
-python rt_timeline.py
-```
-When the program starts, it will download the models. Once the "Ready - Press Start button to begin" message appears, click the "Start" button to begin real-time speaker diarization.
