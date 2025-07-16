@@ -19,19 +19,21 @@ SPEAKER_COLORS = [
 PENDING_COLOR = "#888888"
 MAX_SPEAKERS = 10
 TIMELINE_HEIGHT = 600
-TIMELINE_UPDATE_INTERVAL = 0.2
+TIMELINE_UPDATE_INTERVAL = 0.3
 SIZE_UPDATE_INTERVAL = 1.0
 
 SAMPLE_RATE = 16000
 CHUNK_SIZE = 2048
 WINDOW_SIZE = 1.0
-WIN_SAMPLES = int(SAMPLE_RATE * WINDOW_SIZE)
 WINDOW_PROCESS_INTERVAL = 0.1
+WIN_SAMPLES = int(SAMPLE_RATE * WINDOW_SIZE)
+
 
 DEVICE_PREF = "cuda"
 VAD_THRESH = 0.5 
-PENDING_THRESHOLD = 0.2
+PENDING_THRESHOLD = 0.3
 EMBEDDING_UPDATE_THRESHOLD = 0.4
+
 MIN_PENDING_SIZE = 30
 AUTO_CLUSTER_DISTANCE_THRESHOLD = 0.6
 MIN_CLUSTER_SIZE = 15
@@ -41,7 +43,7 @@ class SileroVAD(QThread):
     
     def __init__(self, device="cpu", threshold=0.5):
         super().__init__()
-        self.device = "cpu"  # 항상 CPU 사용
+        self.device = "cpu"
         self.threshold = threshold
         self.vad_model = None
         self.get_speech_ts = None
@@ -51,7 +53,6 @@ class SileroVAD(QThread):
         self._stop_proc = False
     
     def run(self):
-        # 모델 로딩
         try:
             print("Loading Silero VAD model on CPU...")
             model, utils = torch.hub.load('snakers4/silero-vad', 'silero_vad', 
@@ -66,7 +67,6 @@ class SileroVAD(QThread):
         
         self.model_loaded.emit()
         
-        # 직접 처리 루프
         while not self._stop_proc:
             try:
                 task_id, audio_data, sr = self.vad_queue.get(timeout=0.1)
@@ -124,7 +124,6 @@ class SpeechBrainEncoder(QThread):
         self._stop_proc = False
     
     def run(self):
-        # 모델 다운로드 및 로딩
         model_url = "https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb/resolve/main/embedding_model.ckpt"
         model_path = os.path.join(self.cache_dir, "embedding_model_ecapa.ckpt")
         if not os.path.exists(model_path):
@@ -140,7 +139,6 @@ class SpeechBrainEncoder(QThread):
         self.model_loaded_flag = True
         self.model_loaded.emit()
         
-        # 직접 처리 루프
         while not self._stop_proc:
             try:
                 task_id, audio, sr = self.emb_queue.get(timeout=0.1)
@@ -211,7 +209,6 @@ class SpeakerHandler:
             self.curr_spk = 0
             return 0, 1.0
         
-        # 벡터화된 유사도 계산
         active_mean_embs = []
         active_spk_ids = []
         for spk_id in self.active_spks:
@@ -220,14 +217,12 @@ class SpeakerHandler:
                 active_spk_ids.append(spk_id)
         
         if not active_mean_embs:
-            # 첫 번째 화자로 설정
             self.spk_embs[0].append(emb)
             self.mean_embs[0] = emb
             self.active_spks.add(0)
             self.curr_spk = 0
             return 0, 1.0
         
-        # 행렬 곱셈으로 모든 유사도를 한번에 계산
         emb_norm = emb / np.linalg.norm(emb)
         mean_embs_matrix = np.array(active_mean_embs)
         mean_embs_norm = mean_embs_matrix / np.linalg.norm(mean_embs_matrix, axis=1, keepdims=True)
@@ -238,7 +233,6 @@ class SpeakerHandler:
         best_spk = active_spk_ids[best_idx]
         
         if best_sim >= EMBEDDING_UPDATE_THRESHOLD:
-            # 유사도 0.5 이상: 임베딩 업데이트 + 화자 분류
             spk_id = best_spk
             self.spk_embs[spk_id].append(emb)
             if self.embedding_update_enabled:
@@ -246,19 +240,16 @@ class SpeakerHandler:
             self.curr_spk = spk_id
             return spk_id, best_sim
         elif best_sim >= self.change_thresh:
-            # 유사도 0.3~0.5: 화자 분류만 하고 임베딩 업데이트는 안 함
             spk_id = best_spk
             self.curr_spk = spk_id
             return spk_id, best_sim
         else:
-            # 유사도 0.3 미만: pending 처리
             if self.pending_enabled and len(self.active_spks) < self.max_spks:
                 self.pending_embs.append(emb)
                 self.pending_times.append(seg_time)
                 self._check_pending_promotion()
                 return "pending", best_sim
             else:
-                # pending 비활성화 또는 최대 화자 수 도달시 가장 유사한 화자에 강제 할당 (임베딩 업데이트 없음)
                 spk_id = best_spk
                 self.curr_spk = spk_id
                 return spk_id, best_sim
@@ -306,15 +297,12 @@ class SpeakerHandler:
             )
             labels = clustering.fit_predict(np.array(self.pending_embs))
             
-            # 각 클러스터의 크기 계산
             unique_labels = np.unique(labels)
             cluster_sizes = {label: np.sum(labels == label) for label in unique_labels}
             
-            # 가장 큰 클러스터 선택
             target_cluster = max(cluster_sizes, key=cluster_sizes.get)
             largest_cluster_size = cluster_sizes[target_cluster]
             
-            # 가장 큰 클러스터가 30개 이상이면 승격
             if largest_cluster_size >= MIN_CLUSTER_SIZE:
                 target_indices = np.where(labels == target_cluster)[0]
                 start_idx = target_indices[0]
@@ -403,82 +391,6 @@ class SpeakerHandler:
         if self.embedding_updated:
             self.embedding_updated()
 
-class Segment:
-    def __init__(self, start_time, duration, spk_id=None, emb=None, is_speech=False):
-        self.start_time = start_time
-        self.duration = duration
-        self.spk_id = spk_id
-        self.emb = emb
-        self.is_speech = is_speech
-    
-    @property
-    def end_time(self): 
-        return self.start_time + self.duration
-
-class Timeline:
-    def __init__(self):
-        self.segs = []
-        self.start_time = None
-        self.paused_time = None
-        self.total_paused_duration = 0
-    
-    def start_timeline(self):
-        if self.start_time is None:
-            self.start_time = time.time()
-            self.paused_time = None
-            self.total_paused_duration = 0
-    
-    def pause_timeline(self):
-        if self.start_time is not None and self.paused_time is None:
-            self.paused_time = time.time()
-    
-    def resume_timeline(self):
-        if self.paused_time is not None:
-            self.total_paused_duration += time.time() - self.paused_time
-            self.paused_time = None
-    
-    def get_timeline_time(self):
-        if self.start_time is None:
-            return 0
-        current_time = time.time()
-        if self.paused_time is not None:
-            return self.paused_time - self.start_time - self.total_paused_duration
-        else:
-            return current_time - self.start_time - self.total_paused_duration
-    
-    def add_seg(self, seg):
-        if self.start_time is not None and self.paused_time is None:
-            self.segs.append(seg)
-    
-    def update_pending_segments_to_speaker(self, start_time, end_time, new_speaker_id):
-        for seg in self.segs:
-            if (seg.spk_id == "pending" and seg.start_time >= start_time and seg.start_time <= end_time):
-                seg.spk_id = new_speaker_id
-    
-    def get_segs(self):
-        return self.segs
-    
-    def get_timeline_duration(self):
-        return self.get_timeline_time()
-    
-    def reset(self):
-        self.segs = []
-        self.start_time = None
-        self.paused_time = None
-        self.total_paused_duration = 0
-    
-    def reclassify_segs(self, spk_handler):
-        for seg in self.segs:
-            if seg.is_speech and seg.emb is not None:
-                best_spk, best_sim = None, -1.0
-                for i, mean_emb in enumerate(spk_handler.mean_embs):
-                    if mean_emb is not None:
-                        sim = 1.0 - cosine(seg.emb, mean_emb)
-                        if sim > best_sim:
-                            best_sim = sim
-                            best_spk = i
-                seg.spk_id = best_spk
-
 class AudioCapture(QThread):
     chunk_ready = pyqtSignal(np.ndarray)
     
@@ -517,6 +429,7 @@ class AudioCapture(QThread):
     
     def stop(self): 
         self._running = False
+
 
 class AudioProcessor(QThread):
     tl_updated = pyqtSignal(list)
@@ -648,6 +561,82 @@ class AudioProcessor(QThread):
     
     def stop(self): 
         self._running = False
+
+class Segment:
+    def __init__(self, start_time, duration, spk_id=None, emb=None, is_speech=False):
+        self.start_time = start_time
+        self.duration = duration
+        self.spk_id = spk_id
+        self.emb = emb
+        self.is_speech = is_speech
+    
+    @property
+    def end_time(self): 
+        return self.start_time + self.duration
+
+class Timeline:
+    def __init__(self):
+        self.segs = []
+        self.start_time = None
+        self.paused_time = None
+        self.total_paused_duration = 0
+    
+    def start_timeline(self):
+        if self.start_time is None:
+            self.start_time = time.time()
+            self.paused_time = None
+            self.total_paused_duration = 0
+    
+    def pause_timeline(self):
+        if self.start_time is not None and self.paused_time is None:
+            self.paused_time = time.time()
+    
+    def resume_timeline(self):
+        if self.paused_time is not None:
+            self.total_paused_duration += time.time() - self.paused_time
+            self.paused_time = None
+    
+    def get_timeline_time(self):
+        if self.start_time is None:
+            return 0
+        current_time = time.time()
+        if self.paused_time is not None:
+            return self.paused_time - self.start_time - self.total_paused_duration
+        else:
+            return current_time - self.start_time - self.total_paused_duration
+    
+    def add_seg(self, seg):
+        if self.start_time is not None and self.paused_time is None:
+            self.segs.append(seg)
+    
+    def update_pending_segments_to_speaker(self, start_time, end_time, new_speaker_id):
+        for seg in self.segs:
+            if (seg.spk_id == "pending" and seg.start_time >= start_time and seg.start_time <= end_time):
+                seg.spk_id = new_speaker_id
+    
+    def get_segs(self):
+        return self.segs
+    
+    def get_timeline_duration(self):
+        return self.get_timeline_time()
+    
+    def reset(self):
+        self.segs = []
+        self.start_time = None
+        self.paused_time = None
+        self.total_paused_duration = 0
+    
+    def reclassify_segs(self, spk_handler):
+        for seg in self.segs:
+            if seg.is_speech and seg.emb is not None:
+                best_spk, best_sim = None, -1.0
+                for i, mean_emb in enumerate(spk_handler.mean_embs):
+                    if mean_emb is not None:
+                        sim = 1.0 - cosine(seg.emb, mean_emb)
+                        if sim > best_sim:
+                            best_sim = sim
+                            best_spk = i
+                seg.spk_id = best_spk
 
 class EmbeddingVisualizationWindow(QMainWindow):
     def __init__(self, spk_handler):
@@ -845,7 +834,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.main_widget)
         layout = QVBoxLayout(self.main_widget)
         
-        self.status_label = QLabel("준비 중...")
+        self.status_label = QLabel("Preparing...")
         layout.addWidget(self.status_label)
         
         self.scroll_area = QScrollArea()
@@ -858,32 +847,32 @@ class MainWindow(QMainWindow):
         
         btn_layout = QHBoxLayout()
         
-        self.start_pause_btn = QPushButton("시작")
+        self.start_pause_btn = QPushButton("Start")
         self.start_pause_btn.clicked.connect(self._toggle_recording)
         self.start_pause_btn.setEnabled(False)
         btn_layout.addWidget(self.start_pause_btn)
         
-        self.reset_btn = QPushButton("타임라인 초기화")
+        self.reset_btn = QPushButton("Reset Timeline")
         self.reset_btn.clicked.connect(self._reset_tl)
         self.reset_btn.setEnabled(False)
         btn_layout.addWidget(self.reset_btn)
         
-        self.recluster_btn = QPushButton("화자 재분류")
+        self.recluster_btn = QPushButton("Recluster Speakers")
         self.recluster_btn.clicked.connect(self._recluster)
         self.recluster_btn.setEnabled(False)
         btn_layout.addWidget(self.recluster_btn)
         
-        self.viz_btn = QPushButton("임베딩 시각화")
+        self.viz_btn = QPushButton("Embedding Visualization")
         self.viz_btn.clicked.connect(self._show_visualization)
         self.viz_btn.setEnabled(False)
         btn_layout.addWidget(self.viz_btn)
         
-        self.pending_btn = QPushButton("Pending 비활성화")
+        self.pending_btn = QPushButton("Disable Pending")
         self.pending_btn.clicked.connect(self._toggle_pending)
         self.pending_btn.setEnabled(False)
         btn_layout.addWidget(self.pending_btn)
         
-        self.embedding_update_btn = QPushButton("임베딩 업데이트 비활성화")
+        self.embedding_update_btn = QPushButton("Disable Embedding Update")
         self.embedding_update_btn.clicked.connect(self._toggle_embedding_update)
         self.embedding_update_btn.setEnabled(False)
         btn_layout.addWidget(self.embedding_update_btn)
@@ -918,8 +907,8 @@ class MainWindow(QMainWindow):
             if self.audio_proc:
                 self.audio_proc.resume()
             self.is_recording = True
-            self.start_pause_btn.setText("일시정지")
-            self.status_label.setText("녹음 중...")
+            self.start_pause_btn.setText("Pause")
+            self.status_label.setText("Recording...")
         else:
             self.tl_manager.pause_timeline()
             if self.audio_capture:
@@ -927,15 +916,15 @@ class MainWindow(QMainWindow):
             if self.audio_proc:
                 self.audio_proc.pause()
             self.is_recording = False
-            self.start_pause_btn.setText("계속")
-            self.status_label.setText("일시정지됨")
+            self.start_pause_btn.setText("Resume")
+            self.status_label.setText("Paused")
     
     def _reset_tl(self):
         if self.audio_proc:
             self.audio_proc.reset_tl()
         self.is_recording = False
-        self.start_pause_btn.setText("시작")
-        self.status_label.setText("타임라인이 초기화되었습니다.")
+        self.start_pause_btn.setText("Start")
+        self.status_label.setText("Timeline has been reset.")
     
     def _recluster(self):
         if not self.audio_proc:
@@ -943,50 +932,50 @@ class MainWindow(QMainWindow):
         total_embeddings = self.spk_handler.get_total_embedding_count()
         if total_embeddings < 50:
             QMessageBox.information(
-                self, "알림", 
-                f"리클러스터링하기에 충분한 임베딩이 없습니다.\n"
-                f"현재 임베딩 개수: {total_embeddings}개\n"
-                f"필요한 임베딩 개수: 50개 이상"
+                self, "Information", 
+                f"Not enough embeddings for reclustering.\n"
+                f"Current embeddings: {total_embeddings}\n"
+                f"Required embeddings: 50 or more"
             )
             return
         
         active_speakers = len(self.spk_handler.active_spks)
         cluster_count, ok = QInputDialog.getInt(
-            self, "화자 재분류", 
-            f"화자 수를 입력하세요\n"
-            f"전체 임베딩 개수: {total_embeddings}개\n"
-            f"현재 감지된 화자: {active_speakers}명:",
+            self, "Recluster Speakers", 
+            f"Enter number of speakers:\n"
+            f"Total embeddings: {total_embeddings}\n"
+            f"Currently detected speakers: {active_speakers}:",
             value=max(2, active_speakers), min=2, max=MAX_SPEAKERS
         )
         
         if ok:
             success = self.audio_proc.recluster_spks(cluster_count)
             if success:
-                self.status_label.setText(f"전체 {total_embeddings}개 임베딩을 {cluster_count}명 화자로 재분류했습니다.")
+                self.status_label.setText(f"Reclustered {total_embeddings} embeddings into {cluster_count} speakers.")
             else:
-                QMessageBox.warning(self, "오류", "리클러스터링에 실패했습니다.")
+                QMessageBox.warning(self, "Error", "Reclustering failed.")
     
     def _toggle_pending(self):
         if not self.spk_handler:
             return
         is_enabled = self.spk_handler.toggle_pending()
         if is_enabled:
-            self.pending_btn.setText("Pending 비활성화")
-            self.status_label.setText("Pending 기능이 활성화되었습니다.")
+            self.pending_btn.setText("Disable Pending")
+            self.status_label.setText("Pending feature enabled.")
         else:
-            self.pending_btn.setText("Pending 활성화")
-            self.status_label.setText("Pending 기능이 비활성화되었습니다.")
+            self.pending_btn.setText("Enable Pending")
+            self.status_label.setText("Pending feature disabled.")
     
     def _toggle_embedding_update(self):
         if not self.spk_handler:
             return
         is_enabled = self.spk_handler.toggle_embedding_update()
         if is_enabled:
-            self.embedding_update_btn.setText("임베딩 업데이트 비활성화")
-            self.status_label.setText("임베딩 업데이트가 활성화되었습니다.")
+            self.embedding_update_btn.setText("Disable Embedding Update")
+            self.status_label.setText("Embedding update enabled.")
         else:
-            self.embedding_update_btn.setText("임베딩 업데이트 활성화")
-            self.status_label.setText("임베딩 업데이트가 비활성화되었습니다.")
+            self.embedding_update_btn.setText("Enable Embedding Update")
+            self.status_label.setText("Embedding update disabled.")
     
     def _show_visualization(self):
         if self.visualization_window is None:
@@ -1007,11 +996,11 @@ class MainWindow(QMainWindow):
         self.encoder.model_loaded.connect(self._on_encoder_loaded)
         self.encoder.start()
         
-        self.vad_processor = SileroVAD(device, VAD_THRESH)  # device는 무시되고 CPU 사용
+        self.vad_processor = SileroVAD(device, VAD_THRESH)
         self.vad_processor.model_loaded.connect(self._on_vad_loaded)
         self.vad_processor.start()
         
-        self.status_label.setText("모델 로딩 중... (Encoder + VAD)")
+        self.status_label.setText("Loading models... (Encoder + VAD)")
     
     def _on_encoder_loaded(self):
         self.models_loaded["encoder"] = True
@@ -1042,7 +1031,7 @@ class MainWindow(QMainWindow):
             self.viz_btn.setEnabled(True)
             self.pending_btn.setEnabled(True)
             self.embedding_update_btn.setEnabled(True)
-            self.status_label.setText("준비 완료 - 시작 버튼을 눌러주세요")
+            self.status_label.setText("Ready - Press Start button to begin")
     
     def closeEvent(self, event):
         if self.visualization_window:
