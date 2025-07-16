@@ -1,95 +1,139 @@
-This is draft. I'll explain how I implemented real-time speaker diarization in detail later.
 
----
 
-# Real-time Speaker Diarization Timeline
+# utterr — Real-time Speaker Diarization Timeline
 
-This application provides a real-time speaker diarization timeline using advanced deep learning models. It captures system audio (or microphone input), detects voice activity, generates speaker embeddings, and visualizes who is speaking and when on a dynamic timeline. It features an intelligent system for automatically identifying and adding new speakers.
+> 📌 *All code was written with the help of Claude.*
+> 
+> *Unfortunately, as a programming beginner, I could never have done it alone 😢*
+
+An example project that extracts speaker embeddings using SpeechBrain's ECAPA-TDNN model, performs real-time speaker identification and separation, and visualizes the results on a timeline.
+
+This project serves as a demo and example code showcasing how to implement a real-time speaker diarization system using `SpeechBrain`'s models and toolkit.
 
 <img width="800" height="630" alt="image" src="https://github.com/user-attachments/assets/d1df87f9-83ed-4fd1-a29a-ac6c11114d09" />
 
-## Features
+*(Example screenshot - similar interface appears when running the actual program)*
 
-- **Real-time Visualization**: A continuously updating timeline that maps speech segments to different speakers.
-- **High-Quality Speaker Embeddings**: Utilizes the **ECAPA-TDNN** model (via SpeechBrain) to generate robust speaker embeddings.
-- **Accurate Voice Activity Detection (VAD)**: Employs the **Silero VAD** model for efficient and reliable speech detection.
-- **Automatic Speaker Promotion**: A novel "pending" system that automatically identifies and promotes new speakers when they speak consistently.
-- **Dynamic Re-clustering**: Manually re-cluster all collected speech embeddings to refine speaker assignments at any time.
-- **Embedding Visualization**: An interactive PCA plot to visualize the distribution of speaker embeddings in 2D space, helping to understand the model's classifications.
-- **Configurable**: Easily tweak parameters like similarity thresholds, buffer sizes, and model settings directly in the source code.
-- **Audio Source Selection**: Can capture either system audio (loopback) or microphone input.
+## Key Features
 
-## Core Logic Explained
+*   **Real-time Audio Capture**: Uses the `SoundCard` library to capture microphone or system audio (loopback) in real-time. SoundCard can capture speaker output via loopback without additional setup, making it more useful than PyAudio in my opinion.
+*   **Voice Activity Detection (VAD)**: Uses Silero VAD to accurately detect speech segments in audio.
+*   **Speaker Embedding Extraction**: Extracts speaker embeddings (voice feature vectors) from each speech segment using SpeechBrain's pre-trained ECAPA-TDNN model.
+*   **Dynamic Speaker Clustering**: When a new speaker appears, they are first classified as 'Pending', then automatically clustered and registered as a new speaker once sufficient data is accumulated.
+*   **Manual Reclustering**: If clustering goes wrong, you can manually reclassify all accumulated embeddings to reassign speakers.
+*   **Real-time Timeline Visualization**: Uses PyQt6 to display in real-time which speaker spoke when on a timeline.
+*   **Embedding Distribution Visualization**: Visualizes high-dimensional embeddings in 2D using PCA to show how speaker clusters are distributed.
 
-The application's intelligence lies in how it assigns speech segments to speakers and how it discovers new ones. This is a two-part process:
+## ⚙️ How It Works
 
-### 1. Cosine Similarity-Based Speaker Assignment
+The system processes audio streams by dividing them into short windows and sequentially processing them to identify speakers, operating like a sliding window approach.
 
-When a segment of audio is identified as speech by the VAD, an embedding vector is generated using the ECAPA-TDNN model. This vector is a numerical representation of the speaker's voice characteristics. To determine which speaker this segment belongs to, the system performs the following steps:
+1.  **Audio Window Processing**: Creates and processes 1-second (`WINDOW_SIZE`) audio windows at 0.1-second (`WINDOW_PROCESS_INTERVAL`) intervals.
 
-1.  **Calculate Similarity**: The new embedding is compared against the pre-computed "mean embedding" for every known speaker. The comparison metric is **Cosine Similarity**, which measures the cosine of the angle between two vectors. A similarity score of `1.0` means the voices are identical in characteristics, while `0.0` means they are completely different.
+2.  **Voice Activity Detection (VAD)**: Each 1-second audio window is passed through the **Silero VAD** model to determine whether it contains speech or non-speech (is_speech).
 
-2.  **Decision Thresholds**: The system uses a multi-level thresholding logic to make a decision:
-    *   **High Similarity (`>= EMBEDDING_UPDATE_THRESHOLD`, e.g., 0.4)**: If the similarity to the best-matching speaker is very high, the segment is confidently assigned to that speaker. The new embedding is then added to that speaker's collection, and their "mean embedding" is recalculated (using the median for robustness against outliers). This allows the speaker's profile to adapt over time.
-    *   **Medium Similarity (`>= PENDING_THRESHOLD`, e.g., 0.2)**: If the similarity is moderate, the segment is still assigned to the best-matching speaker. However, the speaker's mean embedding is **not** updated. This prevents a potentially incorrect assignment from "polluting" a well-defined speaker profile.
-    *   **Low Similarity (`< PENDING_THRESHOLD`)**: If the new embedding does not closely match any known speaker, it is considered to be from an unknown or new speaker. The segment is assigned to a special **"Pending"** pool for further analysis.
+3.  **Embedding Extraction**: Windows identified as speech are passed through `SpeechBrain`'s **ECAPA-TDNN model** to extract 'embeddings' - high-dimensional vectors representing the speaker's voice characteristics.
 
-### 2. Automatic Speaker Promotion Logic
+4.  **'Pending' Processing**: When a new embedding has low similarity with all existing registered speakers, it's temporarily assigned to the 'Pending' queue. This is a process of collecting unidentified new speakers for automatic clustering promotion. Specifically, when calculating cosine similarity between a new embedding and all existing speaker representatives, if even the highest similarity is below `PENDING_THRESHOLD` (referred to as `self.change_thresh` in code, default 0.3), it's processed as 'Pending'.
 
-The "Pending" system is designed to automatically discover and add new speakers without manual intervention.
+5.  **New Speaker Promotion (Automatic Clustering)**:
+    When the 'Pending' queue accumulates more than a certain number of embeddings (`MIN_CLUSTER_SIZE`), `scikit-learn`'s `Agglomerative Clustering` is performed to find new speaker clusters. This clustering groups embeddings based on cosine distance and automatically determines the number of clusters through `distance_threshold` (usually dozens of clusters may be created). Lower values create clusters with lower variance, forming tightly packed regions suitable as reference points for individual speakers with minimal outliers. If the largest cluster meets the `MIN_CLUSTER_SIZE` criteria, that cluster is 'promoted' to a new speaker and registered on the timeline.
 
-1.  **Collect Pending Embeddings**: All embeddings that fail to match an existing speaker are collected in a temporary buffer.
+    ```python
+    # _find_cohesive_group method in rt_timeline.py
+    def _find_cohesive_group(self):
+        # ...
+        try:
+            # AgglomerativeClustering performs hierarchical clustering.
+            # Here, n_clusters=None and distance_threshold is specified to automatically determine
+            # the number of clusters based on distance according to data structure.
+            clustering = AgglomerativeClustering(
+                n_clusters=None,
+                distance_threshold=AUTO_CLUSTER_DISTANCE_THRESHOLD,  # 0.6
+                metric='cosine',
+                linkage='average' # Uses average distance between clusters
+            )
+            labels = clustering.fit_predict(np.array(self.pending_embs))
 
-2.  **Trigger Clustering**: Once the number of pending embeddings reaches a minimum size (`MIN_CLUSTER_SIZE`, e.g., 30 samples), an automatic analysis is triggered. This ensures we have enough data to make a reliable decision.
-
-3.  **Find Cohesive Groups**: The system uses **Agglomerative Clustering** with a `cosine` distance metric on the pending embeddings. The goal is to find a dense, cohesive group of embeddings that likely belong to a single new speaker.
-
-4.  **Promote New Speaker**: If the clustering algorithm finds a cluster that is large enough (`>= MIN_CLUSTER_SIZE`) and internally consistent (within `AUTO_CLUSTER_DISTANCE_THRESHOLD`), that cluster is "promoted" to a new speaker:
-    *   A new speaker ID is created.
-    *   All embeddings from the promoted cluster are assigned to this new speaker.
-    *   A mean embedding is calculated for this new speaker.
-    *   The timeline is updated, re-assigning all corresponding segments from "Pending" to the new speaker ID.
-    *   The pending buffer is cleared, ready to discover the next new speaker.
-
-This promotion logic allows the application to start with no known speakers and dynamically add them as they are detected in the audio stream.
-
-## Requirements
-
-- Python 3.8+
-- PyTorch (`torch`, `torchaudio`)
-- PyQt6
-- soundcard
-- numpy
-- scikit-learn
-- scipy
-- matplotlib
-- speechbrain
-
-## Installation
-**Install the required packages:**
-    ```bash
-    pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu118
-    pip install soundcard numpy PyQt6 scikit-learn scipy matplotlib speechbrain
+            # The largest cluster among generated clusters is considered as a new speaker candidate.
+            # ...
     ```
-    *(Note: Adjust the PyTorch installation command based on your system's CUDA version or if you're using CPU only. See the [PyTorch website](https://pytorch.org/get-started/locally/) for details.)*
+(Speaker utterances generally form spherical clusters, and I believe the AgglomerativeClustering method is well-suited for speaker utterance spherical clusters.)
 
-## How to Run
+6.  **Speaker Classification (Cosine Similarity-based)**: When a new embedding is not processed as `PENDING_THRESHOLD`, it determines which existing speaker it belongs to. This is done by calculating **cosine similarity** between each speaker cluster's representative embedding (median) and the new embedding. The embedding is assigned to the speaker with the highest similarity. Once assigned, the representative embedding value of that cluster is updated (only when above EMBEDDING_UPDATE_THRESHOLD).
 
-Simply execute the main Python script:
+    ```python
+    def classify_spk(self, emb, seg_time):
+        # ...
+        # Normalize new embedding vector
+        emb_norm = emb / np.linalg.norm(emb)
 
+        # Get and normalize existing speakers' representative embedding matrix
+        mean_embs_matrix = np.array(active_mean_embs)
+        mean_embs_norm = mean_embs_matrix / np.linalg.norm(mean_embs_matrix, axis=1, keepdims=True)
+
+        similarities = np.dot(mean_embs_norm, emb_norm)
+
+        # Find the speaker with highest similarity
+        best_idx = np.argmax(similarities)
+        best_sim = similarities[best_idx]
+        best_spk = active_spk_ids[best_idx]
+
+        # If similarity exceeds threshold, classify as that speaker
+        if best_sim >= self.change_thresh: # PENDING_THRESHOLD
+            spk_id = best_spk
+            self.curr_spk = spk_id
+            # If similarity exceeds EMBEDDING_UPDATE_THRESHOLD, update representative embedding too
+            # ...
+            return spk_id, best_sim
+        else:
+            # If similarity is low, process as 'Pending' (step 4)
+            # ...
+            return "pending", best_sim
+    ```
+
+7.  **Manual Reclustering**: Through the "Recluster Speakers" button, users can re-perform complete clustering on all collected embeddings (existing speakers + Pending) according to a user-specified number of speakers (`n_clusters`). This allows users to directly resolve errors from the automatic clustering process, such as misclassification or one speaker being split into multiple speakers.
+
+## ⚠️ Issues and Troubles
+
+*   **Parameter Dependency**: Key parameters like `PENDING_THRESHOLD` and `AUTO_CLUSTER_DISTANCE_THRESHOLD` may require adjustment for optimal values depending on the usage environment (field conditions, noise levels, number of speakers).
+*   **Similar Voice Distinction**: Cosine similarity-based classification may not effectively distinguish speakers with very similar vocal timbres when they speak simultaneously.
+*   **Threshold Setting Dilemma**:
+    *   When many speakers with similar voices are expected, `PENDING_THRESHOLD` and `AUTO_CLUSTER_DISTANCE_THRESHOLD` should be set low.
+    *   However, this can cause a single speaker to be incorrectly promoted as multiple new speakers when their speech characteristics change slightly. The **reclustering** feature was added to correct such issues post-hoc.
+*   **Robustness**: Due to the above reasons, this is a demo version that is not perfectly 'robust' against various exceptional situations.
+
+## 🛠 Installation and Usage
+
+### Requirements
+
+*   **Windows**: SoundCard's loopback functionality only works on Windows!
+*   **Python**: 3.10 or higher
+*   **Conda**
+
+### Installation Process
+
+1.  **Create and activate Conda environment**
+    ```bash
+    conda create -n rtt_env python=3.10
+    conda activate rtt_env
+    ```
+
+2.  **Install required packages**
+
+    It's recommended to install PyTorch according to your system environment (CUDA support).
+    *   **CPU version:**
+        ```bash
+        pip install torch torchaudio soundcard numpy PyQt6 scikit-learn matplotlib speechbrain
+        ```
+    *   **GPU (CUDA) version:** (if you have NVIDIA GPU)
+        Check the installation command for your CUDA version on the [PyTorch official website](https://pytorch.org/get-started/locally/).
+
+
+### Execution
+
+Run the program with the following command:
 ```bash
 python rt_timeline.py
 ```
-
-The first time you run the application, it will download the necessary VAD and speaker embedding models, which may take a few minutes. These are cached for future runs.
-
-## Configuration
-
-Key parameters can be adjusted at the top of the `rt_timeline.py` file:
-
-- `DEVICE_PREF`: Set to `"cuda"` to use a GPU or `"cpu"`.
-- `VAD_THRESH`: The confidence threshold for the Silero VAD model (0.0 to 1.0).
-- `PENDING_THRESHOLD`: The cosine similarity score below which an embedding is sent to the "Pending" pool.
-- `EMBEDDING_UPDATE_THRESHOLD`: The cosine similarity score above which a speaker's mean embedding is updated.
-- `MIN_CLUSTER_SIZE`: The minimum number of pending embeddings required to attempt a new speaker promotion.
-- `AUTO_CLUSTER_DISTANCE_THRESHOLD`: The maximum cosine distance for clustering pending embeddings.
+When the program starts, it will download the models. Once the "Ready - Press Start button to begin" message appears, click the "Start" button to begin real-time speaker diarization.
