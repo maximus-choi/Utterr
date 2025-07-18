@@ -1,7 +1,8 @@
 import soundcard as sc, numpy as np
 import threading, time, sys, os, urllib.request, queue
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton, 
-                           QHBoxLayout, QScrollArea, QInputDialog, QMessageBox, QLabel)
+                           QHBoxLayout, QScrollArea, QInputDialog, QMessageBox, QLabel,
+                           QComboBox, QGroupBox)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QColor, QPainter, QBrush, QPen, QFont
 import torch, torchaudio
@@ -394,32 +395,64 @@ class SpeakerHandler:
 class AudioCapture(QThread):
     chunk_ready = pyqtSignal(np.ndarray)
     
-    def __init__(self, use_mic=False):
+    def __init__(self, device_name=None, use_mic=False):
         super().__init__()
         self._running = True
         self._paused = False
         self.use_mic = use_mic
-        device_id = str(sc.default_microphone().name if use_mic else sc.default_speaker().name)
-        self.inc_loopback = not use_mic
-        self.device_id = device_id
+        self.device_name = device_name
+        self.device = None
+        self._setup_device()
+    
+    def _setup_device(self):
+        try:
+            if self.device_name:
+                self.device = sc.get_microphone(id=self.device_name, include_loopback=not self.use_mic)
+            else:
+                if self.use_mic:
+                    self.device = sc.default_microphone()
+                else:
+                    self.device = sc.get_microphone(id=str(sc.default_speaker().name), include_loopback=True)
+        except Exception as e:
+            print(f"Error setting up audio device: {e}")
+            # Fallback to default
+            if self.use_mic:
+                self.device = sc.default_microphone()
+            else:
+                self.device = sc.get_microphone(id=str(sc.default_speaker().name), include_loopback=True)
+    
+    def change_device(self, device_name, use_mic):
+        self.device_name = device_name
+        self.use_mic = use_mic
+        self._setup_device()
     
     def run(self):
-        device = sc.get_microphone(id=self.device_id, include_loopback=self.inc_loopback)
-        with device.recorder(samplerate=SAMPLE_RATE, blocksize=CHUNK_SIZE) as recorder:
-            while self._running:
-                if self._paused:
-                    time.sleep(0.1)
-                    continue
-                audio_data = recorder.record(numframes=CHUNK_SIZE)
-                if audio_data.size == 0:
-                    continue
-                if len(audio_data.shape) > 1:
-                    audio_data = audio_data[:, 0]
-                audio_data = audio_data.flatten().astype(np.float32)
-                max_val = np.max(np.abs(audio_data))
-                if max_val > 1.0: 
-                    audio_data = audio_data / max_val
-                self.chunk_ready.emit(audio_data)
+        if not self.device:
+            print("No audio device available")
+            return
+            
+        try:
+            with self.device.recorder(samplerate=SAMPLE_RATE, blocksize=CHUNK_SIZE) as recorder:
+                while self._running:
+                    if self._paused:
+                        time.sleep(0.1)
+                        continue
+                    try:
+                        audio_data = recorder.record(numframes=CHUNK_SIZE)
+                        if audio_data.size == 0:
+                            continue
+                        if len(audio_data.shape) > 1:
+                            audio_data = audio_data[:, 0]
+                        audio_data = audio_data.flatten().astype(np.float32)
+                        max_val = np.max(np.abs(audio_data))
+                        if max_val > 1.0: 
+                            audio_data = audio_data / max_val
+                        self.chunk_ready.emit(audio_data)
+                    except Exception as e:
+                        print(f"Audio recording error: {e}")
+                        time.sleep(0.1)
+        except Exception as e:
+            print(f"Error initializing audio recorder: {e}")
     
     def pause(self):
         self._paused = True
@@ -825,6 +858,72 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         QTimer.singleShot(500, self._init_app)
     
+    def _get_audio_devices(self):
+        """Get list of available audio devices"""
+        try:
+            microphones = [(mic.name, True) for mic in sc.all_microphones()]
+            speakers = [(spk.name, False) for spk in sc.all_speakers()]
+            return microphones + speakers
+        except Exception as e:
+            print(f"Error getting audio devices: {e}")
+            return []
+    
+    def _refresh_devices(self):
+        """Refresh the audio device list"""
+        self.device_combo.clear()
+        devices = self._get_audio_devices()
+        
+        for device_name, is_mic in devices:
+            device_type = "Microphone" if is_mic else "Speaker"
+            display_name = f"[{device_type}] {device_name}"
+            self.device_combo.addItem(display_name, (device_name, is_mic))
+        
+        # Set default selection
+        if self.device_combo.count() > 0:
+            # Try to find default speaker first (for loopback)
+            try:
+                default_speaker_name = str(sc.default_speaker().name)
+                for i in range(self.device_combo.count()):
+                    device_name, is_mic = self.device_combo.itemData(i)
+                    if device_name == default_speaker_name and not is_mic:
+                        self.device_combo.setCurrentIndex(i)
+                        break
+                else:
+                    self.device_combo.setCurrentIndex(0)
+            except:
+                self.device_combo.setCurrentIndex(0)
+    
+    def _apply_device_change(self):
+        """Apply the selected audio device"""
+        if self.device_combo.currentIndex() < 0:
+            return
+        
+        device_name, is_mic = self.device_combo.currentData()
+        
+        # Stop current recording if active
+        was_recording = self.is_recording
+        if was_recording:
+            self._toggle_recording()  # Pause
+        
+        # Stop and recreate audio capture
+        if self.audio_capture:
+            self.audio_capture.stop()
+            self.audio_capture.wait()
+        
+        # Create new audio capture with selected device
+        self.audio_capture = AudioCapture(device_name=device_name, use_mic=is_mic)
+        self.audio_capture.pause()
+        self.audio_capture.chunk_ready.connect(self.audio_proc.add_chunk)
+        self.audio_capture.start()
+        
+        # Update status
+        device_type = "Microphone" if is_mic else "Speaker"
+        self.status_label.setText(f"Audio device changed to: [{device_type}] {device_name}")
+        
+        # Resume recording if it was active
+        if was_recording:
+            QTimer.singleShot(100, self._toggle_recording)  # Resume after a short delay
+    
     def _on_embeddings_updated(self):
         if self.visualization_window and self.visualization_window.isVisible():
             self.visualization_window.update_plot()
@@ -845,6 +944,7 @@ class MainWindow(QMainWindow):
         self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         layout.addWidget(self.scroll_area, 1)
         
+        # Control buttons
         btn_layout = QHBoxLayout()
         
         self.start_pause_btn = QPushButton("Start")
@@ -879,6 +979,31 @@ class MainWindow(QMainWindow):
         
         layout.addLayout(btn_layout)
         
+        # Audio device selection
+        device_group = QGroupBox("Audio Device Selection")
+        device_layout = QHBoxLayout(device_group)
+        
+        device_layout.addWidget(QLabel("Device:"))
+        
+        self.device_combo = QComboBox()
+        self.device_combo.setMinimumWidth(300)
+        device_layout.addWidget(self.device_combo)
+        
+        self.refresh_btn = QPushButton("Refresh")
+        self.refresh_btn.clicked.connect(self._refresh_devices)
+        device_layout.addWidget(self.refresh_btn)
+        
+        self.apply_device_btn = QPushButton("Apply")
+        self.apply_device_btn.clicked.connect(self._apply_device_change)
+        self.apply_device_btn.setEnabled(False)
+        device_layout.addWidget(self.apply_device_btn)
+        
+        device_layout.addStretch()
+        layout.addWidget(device_group)
+        
+        # Initialize device list
+        self._refresh_devices()
+        
         self.scroll_timer = QTimer()
         self.scroll_timer.timeout.connect(self._auto_scroll)
         self.scroll_timer.start(2000)
@@ -891,6 +1016,12 @@ class MainWindow(QMainWindow):
             QPushButton:disabled {background: #333337; color: #777777;}
             QLabel {padding: 5px; font-size: 14px;}
             QScrollArea {border: 1px solid #555555;}
+            QGroupBox {font-weight: bold; border: 2px solid #555555; margin: 10px 0px; padding-top: 10px;}
+            QGroupBox::title {subcontrol-origin: margin; left: 10px; padding: 0px 5px 0px 5px;}
+            QComboBox {background: #3F3F46; color: #EEEEEE; border: 1px solid #555555; 
+                      padding: 5px 10px; margin: 5px;}
+            QComboBox::drop-down {border: none;}
+            QComboBox::down-arrow {image: none; border: none;}
         """)
     
     def _auto_scroll(self):
@@ -985,7 +1116,7 @@ class MainWindow(QMainWindow):
         self.visualization_window.activateWindow()
     
     def _init_app(self):
-        self.resize(1400, 800)
+        self.resize(1400, 900)  # Increased height for device selection area
         device = "cuda" if DEVICE_PREF == "cuda" and torch.cuda.is_available() else "cpu"
         if DEVICE_PREF == "cuda" and not torch.cuda.is_available():
             print("CUDA not available, falling back to CPU")
@@ -1012,7 +1143,12 @@ class MainWindow(QMainWindow):
     
     def _check_models_ready(self):
         if all(self.models_loaded.values()):
-            self.audio_capture = AudioCapture(use_mic=False)
+            # Get initial device selection
+            device_name, use_mic = None, False
+            if self.device_combo.currentIndex() >= 0:
+                device_name, use_mic = self.device_combo.currentData()
+            
+            self.audio_capture = AudioCapture(device_name=device_name, use_mic=use_mic)
             self.audio_proc = AudioProcessor(self.encoder, self.vad_processor, 
                                            self.spk_handler, self.tl_manager)
             
@@ -1031,7 +1167,14 @@ class MainWindow(QMainWindow):
             self.viz_btn.setEnabled(True)
             self.pending_btn.setEnabled(True)
             self.embedding_update_btn.setEnabled(True)
-            self.status_label.setText("Ready - Press Start button to begin")
+            self.apply_device_btn.setEnabled(True)
+            
+            # Show current device in status
+            if device_name:
+                device_type = "Microphone" if use_mic else "Speaker"
+                self.status_label.setText(f"Ready - Current device: [{device_type}] {device_name}")
+            else:
+                self.status_label.setText("Ready - Press Start button to begin")
     
     def closeEvent(self, event):
         if self.visualization_window:
