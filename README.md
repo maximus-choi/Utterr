@@ -11,8 +11,6 @@ This project serves as a demo and example code showcasing how to implement a rea
 
 <img width="800" height="630" alt="image" src="https://github.com/user-attachments/assets/d1df87f9-83ed-4fd1-a29a-ac6c11114d09" />
 
-*(Example screenshot - similar interface appears when running the actual program)*
-
 ## Key Features
 
 *   **Real-time Audio Capture**: Uses the `SoundCard` library to capture microphone or system audio (loopback) in real-time. SoundCard can capture speaker output via loopback without additional setup, making it more useful than PyAudio in my opinion.
@@ -29,7 +27,7 @@ This project serves as a demo and example code showcasing how to implement a rea
 
 *   **Windows**: SoundCard's loopback functionality only works on Windows!
 *   **Python**: 3.10 or higher
-*   **Conda(optional)**
+*   **Conda**
 
 ### Installation Process
 
@@ -55,6 +53,7 @@ Run the program with the following command:
 ```bash
 python rt_timeline.py
 ```
+(Run as administrator on first launch.)
 When the program starts, it will download the models. Once the "Ready - Press Start button to begin" message appears, click the "Start" button to begin real-time speaker diarization.
 
 ## ⚙️ How It Works
