@@ -31,7 +31,7 @@ This project serves as a demo and example code showcasing how to implement a rea
 
 ### Installation Process
 
-1.  **Create and activate Conda environment(optional)**
+1.  **Create and activate Conda environment**
     ```bash
     conda create -n rtt_env python=3.10
     conda activate rtt_env
@@ -49,11 +49,11 @@ This project serves as a demo and example code showcasing how to implement a rea
 
 ### Execution
 
-Run the program with the following command:
+Run the program with the following command **(Run as administrator on first launch)**:
 ```bash
 python rt_timeline.py
 ```
-(Run as administrator on first launch.)
+
 When the program starts, it will download the models. Once the "Ready - Press Start button to begin" message appears, click the "Start" button to begin real-time speaker diarization.
 
 ## ⚙️ How It Works
