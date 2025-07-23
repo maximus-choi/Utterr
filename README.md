@@ -1,5 +1,5 @@
 
-# utterr — Real-time Speaker Diarization Timeline
+# Utterr — Real-time Speaker Diarization Timeline
 
 > 📌 *All code was written with the help of Claude.*
 > 
