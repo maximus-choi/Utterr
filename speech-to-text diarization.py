@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 import requests
 import json
 
-# 기존 상수들
+
 SPEAKER_COLORS = [
     "#FF4444", "#44FF44", "#4444FF", "#FFFF44", "#FF44FF", 
     "#44FFFF", "#FF8844", "#FF009D", "#8844FF", "#FFAA44"
@@ -36,14 +36,13 @@ WIN_SAMPLES = int(SAMPLE_RATE * WINDOW_SIZE)
 
 DEVICE_PREF = "cuda"
 VAD_THRESH = 0.5 
-PENDING_THRESHOLD = 0.3
-EMBEDDING_UPDATE_THRESHOLD = 0.4
+PENDING_THRESHOLD = 0.4
+EMBEDDING_UPDATE_THRESHOLD = 0.5
 
-MIN_PENDING_SIZE = 30
+MIN_PENDING_SIZE = 15
 AUTO_CLUSTER_DISTANCE_THRESHOLD = 0.6
-MIN_CLUSTER_SIZE = 15
+MIN_CLUSTER_SIZE = 10
 
-# Azure STT 설정
 SPEECH_KEY = ""
 SERVICE_REGION = "koreacentral"
 SPEECH_LANGUAGE = "ko-KR"
@@ -241,7 +240,9 @@ class STTWorker(QThread):
         self.speech_config.set_property(
             speechsdk.PropertyId.SpeechServiceResponse_StablePartialResultThreshold, "3"
         )
-        self.speech_config.enable_audio_logging()
+        self.speech_config.set_property(
+           speechsdk.PropertyId.Speech_SegmentationSilenceTimeoutMs, "100"
+        )
 
     def _setup_audio_stream(self):
         self.audio_format = speechsdk.audio.AudioStreamFormat(
@@ -928,7 +929,7 @@ class TranscriptionWindow(QMainWindow):
     def __init__(self, timeline_manager):
         super().__init__()
         self.timeline_manager = timeline_manager
-        self.setWindowTitle("실시간 필사")
+        self.setWindowTitle("TranscriptionWindow")
         self.setGeometry(100, 100, 800, 600)
         
         # 중앙 위젯 설정
@@ -942,13 +943,13 @@ class TranscriptionWindow(QMainWindow):
         # 텍스트 박스 생성
         self.text_edit = QTextEdit()
         self.text_edit.setReadOnly(True)
-        self.text_edit.setFont(QFont("맑은 고딕", 12))
-        self.text_edit.setPlaceholderText("음성 인식 결과가 여기에 표시됩니다...")
+        self.text_edit.setFont(QFont("Arial", 15))
+        self.text_edit.setPlaceholderText("waiting...")
         self.text_edit.setAcceptRichText(True)  # Rich Text 활성화
         layout.addWidget(self.text_edit)
         
         # 현재 표시 중인 중간 결과 추적
-        self.current_recognizing_text = ""
+        self.current_recognizing_text = ""  # 현재 표시 중인 텍스트
         self.current_speaker = None
         
         # 스타일 설정
@@ -970,72 +971,67 @@ class TranscriptionWindow(QMainWindow):
         else:
             return "#CCCCCC"  # 기본 색상
     
-    def _find_common_prefix(self, text1, text2):
-        """두 텍스트의 공통 접두사 길이 반환"""
-        if not text1 or not text2:
-            return 0
+    def _find_text_differences(self, old_text, new_text):
+        """두 텍스트 간의 문자 단위 차이점을 찾아 반환"""
+        # 공통 접두사 길이 찾기 (문자 단위)
+        common_prefix_len = 0
+        min_len = min(len(old_text), len(new_text))
         
-        min_len = min(len(text1), len(text2))
         for i in range(min_len):
-            if text1[i] != text2[i]:
-                return i
-        return min_len
+            if old_text[i] == new_text[i]:
+                common_prefix_len += 1
+            else:
+                break
+        
+        # 변경된 부분 반환
+        unchanged_text = new_text[:common_prefix_len]
+        changed_text = new_text[common_prefix_len:]
+        removed_count = len(old_text) - common_prefix_len
+        
+        return unchanged_text, changed_text, removed_count
     
     def update_text_display(self, text_type, content, word_timestamps=None):
         """음성 인식 결과를 텍스트 박스에 업데이트"""
         if text_type == "recognizing":
-            # 중간 결과: 추가되는 단어에만 현재 화자 색상 적용
+            # 중간 결과: 문자 단위 변경 감지 및 처리
+            new_text = content.strip()
             cursor = self.text_edit.textCursor()
             
             if self.current_recognizing_text:
-                # 공통 접두사 길이 찾기
-                common_prefix_len = self._find_common_prefix(self.current_recognizing_text, content)
+                # 기존 텍스트와 새 텍스트 비교 (문자 단위)
+                unchanged_text, changed_text, removed_count = self._find_text_differences(
+                    self.current_recognizing_text, new_text
+                )
                 
-                # 공통 부분이 충분히 많으면 (50% 이상) 점진적 업데이트
-                if common_prefix_len >= len(self.current_recognizing_text) * 0.5:
-                    # 변경된 부분만 업데이트
-                    
-                    # 1. 공통 부분 이후의 이전 텍스트 제거
-                    chars_to_remove = len(self.current_recognizing_text) - common_prefix_len
-                    if chars_to_remove > 0:
-                        cursor.movePosition(QTextCursor.MoveOperation.End)
-                        for _ in range(chars_to_remove):
-                            cursor.deletePreviousChar()
-                    
-                    # 2. 새로운 부분 추가
-                    new_part = content[common_prefix_len:]
-                    if new_part:
-                        cursor.movePosition(QTextCursor.MoveOperation.End)
-                        format = QTextCharFormat()
-                        format.setFontItalic(True)
-                        speaker_color = self.get_speaker_color(self.current_speaker)
-                        format.setForeground(QColor(speaker_color))
-                        cursor.setCharFormat(format)
-                        cursor.insertText(new_part)
-                else:
-                    # 공통 부분이 적으면 전체 재생성 (화자 변경 등)
+                # 제거된 문자들 삭제
+                if removed_count > 0:
                     cursor.movePosition(QTextCursor.MoveOperation.End)
-                    for _ in range(len(self.current_recognizing_text)):
+                    for _ in range(removed_count):
                         cursor.deletePreviousChar()
+                
+                # 변경된 부분 추가 (현재 화자 색상으로만)
+                if changed_text:
+                    cursor.movePosition(QTextCursor.MoveOperation.End)
                     
+                    # 변경된 텍스트를 현재 화자 색상으로 표시
+                    format = QTextCharFormat()
+                    format.setFontItalic(True)
+                    speaker_color = self.get_speaker_color(self.current_speaker)
+                    format.setForeground(QColor(speaker_color))
+                    cursor.setCharFormat(format)
+                    cursor.insertText(changed_text)
+            else:
+                # 처음 중간 결과인 경우 - 모든 텍스트를 현재 화자 색상으로
+                if new_text:
                     cursor.movePosition(QTextCursor.MoveOperation.End)
                     format = QTextCharFormat()
                     format.setFontItalic(True)
                     speaker_color = self.get_speaker_color(self.current_speaker)
                     format.setForeground(QColor(speaker_color))
                     cursor.setCharFormat(format)
-                    cursor.insertText(content)
-            else:
-                # 처음 중간 결과인 경우
-                cursor.movePosition(QTextCursor.MoveOperation.End)
-                format = QTextCharFormat()
-                format.setFontItalic(True)
-                speaker_color = self.get_speaker_color(self.current_speaker)
-                format.setForeground(QColor(speaker_color))
-                cursor.setCharFormat(format)
-                cursor.insertText(content)
+                    cursor.insertText(new_text)
             
-            self.current_recognizing_text = content
+            self.current_recognizing_text = new_text
             self.text_edit.setTextCursor(cursor)
             
         elif text_type == "recognized":
@@ -1051,8 +1047,8 @@ class TranscriptionWindow(QMainWindow):
             # 최종 결과 추가
             cursor.movePosition(QTextCursor.MoveOperation.End)
             
-            timestamp = time.strftime("%H:%M:%S")
-            cursor.insertText(f"[{timestamp}] ")
+           # timestamp = time.strftime("%H:%M:%S")
+           # cursor.insertText(f"[{timestamp}] ")
             
             # 단어별 색상 적용
             if word_timestamps:
@@ -1067,8 +1063,7 @@ class TranscriptionWindow(QMainWindow):
                 if translated_text:
                     cursor.insertText("\n")
                     format = QTextCharFormat()
-                    format.setForeground(QColor("#AAAAAA"))
-                    format.setFontItalic(True)
+                    format.setForeground(QColor("#FFFFFF"))
                     cursor.setCharFormat(format)
                     cursor.insertText(translated_text)
             else:
@@ -1293,7 +1288,7 @@ class TimelineUI(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("실시간 화자 분리 + STT 통합 시스템")
+        self.setWindowTitle("speech-to-text diarization")
         self.encoder = None
         self.vad_processor = None
         self.audio_capture = None
