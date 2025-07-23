@@ -17,7 +17,7 @@ This project serves as a demo and example code showcasing how to implement a rea
 **▶️ Demo Video(Click Above for the Demo Video)**  
 
 
-## Key Features
+## 🤔 Key Features
 
 *   **Real-time Audio Capture**: Uses the `SoundCard` library to capture microphone or system audio (loopback) in real-time. SoundCard can capture speaker output via loopback without additional setup, making it more useful than PyAudio in my opinion.
 *   **Voice Activity Detection (VAD)**: Uses Silero VAD to accurately detect speech segments in audio.
@@ -27,6 +27,7 @@ This project serves as a demo and example code showcasing how to implement a rea
 *   **Real-time Timeline Visualization**: Uses PyQt6 to display in real-time which speaker spoke when on a timeline.
 *   **Embedding Distribution Visualization**: Visualizes high-dimensional embeddings in 2D using PCA to show how speaker clusters are distributed.
 <img width="800" height="630" alt="image" src="https://github.com/user-attachments/assets/d1df87f9-83ed-4fd1-a29a-ac6c11114d09" />
+
 ## 🛠 Installation and Usage
 
 ### Requirements
