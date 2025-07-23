@@ -5,13 +5,16 @@
 > 
 > *Unfortunately, as a programming beginner, I could never have done it alone 😢*
 
+
+
+
 An example project that extracts speaker embeddings using SpeechBrain's ECAPA-TDNN model, performs real-time speaker identification and separation, and visualizes the results on a timeline.
 
 This project serves as a demo and example code showcasing how to implement a real-time speaker diarization system using `SpeechBrain`'s models and toolkit.
 
-<img width="800" height="630" alt="image" src="https://github.com/user-attachments/assets/d1df87f9-83ed-4fd1-a29a-ac6c11114d09" />
+[![Video](https://img.youtube.com/vi/0DTFxcHnJ14/maxresdefault.jpg)](https://youtu.be/0DTFxcHnJ14?si=1QqzzcVz6zpmH_vy)
 
-[![YouTube 비디오](https://img.youtube.com/vi/0DTFxcHnJ14/0.jpg)](https://youtu.be/0DTFxcHnJ14?si=1QqzzcVz6zpmH_vy)
+**▶️ Demo Video(Click Above for the Demo Video)**  
 
 
 ## Key Features
@@ -23,7 +26,7 @@ This project serves as a demo and example code showcasing how to implement a rea
 *   **Manual Reclustering**: If clustering goes wrong, you can manually reclassify all accumulated embeddings to reassign speakers.
 *   **Real-time Timeline Visualization**: Uses PyQt6 to display in real-time which speaker spoke when on a timeline.
 *   **Embedding Distribution Visualization**: Visualizes high-dimensional embeddings in 2D using PCA to show how speaker clusters are distributed.
-
+<img width="800" height="630" alt="image" src="https://github.com/user-attachments/assets/d1df87f9-83ed-4fd1-a29a-ac6c11114d09" />
 ## 🛠 Installation and Usage
 
 ### Requirements
