@@ -11,6 +11,9 @@ This project serves as a demo and example code showcasing how to implement a rea
 
 <img width="800" height="630" alt="image" src="https://github.com/user-attachments/assets/d1df87f9-83ed-4fd1-a29a-ac6c11114d09" />
 
+[![YouTube 비디오](https://img.youtube.com/vi/0DTFxcHnJ14/0.jpg)](https://youtu.be/0DTFxcHnJ14?si=1QqzzcVz6zpmH_vy)
+
+
 ## Key Features
 
 *   **Real-time Audio Capture**: Uses the `SoundCard` library to capture microphone or system audio (loopback) in real-time. SoundCard can capture speaker output via loopback without additional setup, making it more useful than PyAudio in my opinion.
