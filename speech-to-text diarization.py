@@ -153,13 +153,12 @@ class SpeechBrainEncoder(QThread):
 
 class STTWorker(QThread):
     update_text = pyqtSignal(str, str, object)
+    stt_failed = pyqtSignal(str)
     
     def __init__(self, timeline_manager):
         super().__init__()
         self.timeline_manager = timeline_manager
         self.speech_language, self.translation_language = SPEECH_LANGUAGE, TRANSLATION_LANGUAGE
-        self._init_azure_config()
-        self._setup_audio_stream()
         self.executor = ThreadPoolExecutor(max_workers=4)
         self.running = True
         self.lock = threading.Lock()
@@ -167,8 +166,23 @@ class STTWorker(QThread):
         self.current_speaker = None
         self.stt_start_time = self.timeline_start_time = None
         self.time_offset = 0.0
+        self.stt_enabled = False
+        self.recognizer = None
+        self.audio_stream = None
+        
+        # Try to initialize Azure config
+        try:
+            self._init_azure_config()
+            self._setup_audio_stream()
+            self.stt_enabled = True
+        except Exception as e:
+            print(f"Azure Speech Services initialization failed: {e}")
+            self.stt_enabled = False
+            self.stt_failed.emit(f"STT disabled: {str(e)}")
 
     def _init_azure_config(self):
+        if not SPEECH_KEY:
+            raise Exception("Azure Speech key not configured")
         self.speech_config = speechsdk.SpeechConfig(subscription=SPEECH_KEY, region=SERVICE_REGION)
         self.speech_config.request_word_level_timestamps()
         self.speech_config.output_format = speechsdk.OutputFormat.Detailed
@@ -181,6 +195,7 @@ class STTWorker(QThread):
         self.audio_config = speechsdk.audio.AudioConfig(stream=self.audio_stream)
 
     def start_stt_with_timeline_sync(self):
+        if not self.stt_enabled: return
         self.timeline_start_time = self.timeline_manager.start_time
         self.stt_start_time = time.time()
         if self.timeline_start_time: self.time_offset = self.stt_start_time - self.timeline_start_time
@@ -215,40 +230,63 @@ class STTWorker(QThread):
     def set_current_speaker(self, speaker_id): self.current_speaker = speaker_id
 
     def process_audio(self, chunk):
+        if not self.stt_enabled or not self.audio_stream: return
         try: self.audio_stream.write(chunk)
         except Exception as e: print(f"스트리밍 오류: {str(e)}")
 
     def run(self):
-        self.recognizer = speechsdk.SpeechRecognizer(speech_config=self.speech_config, 
-            audio_config=self.audio_config, language=self.speech_language)
+        if not self.stt_enabled:
+            print("STT is disabled due to Azure configuration issues")
+            return
+            
+        try:
+            self.recognizer = speechsdk.SpeechRecognizer(speech_config=self.speech_config, 
+                audio_config=self.audio_config, language=self.speech_language)
 
-        def recognizing_callback(evt):
-            if evt.result.reason == speechsdk.ResultReason.RecognizingSpeech:
-                with self.lock:
-                    self.current_transcript[0] = evt.result.text
-                    self.update_text.emit("recognizing", evt.result.text, None)
+            def recognizing_callback(evt):
+                if evt.result.reason == speechsdk.ResultReason.RecognizingSpeech:
+                    with self.lock:
+                        self.current_transcript[0] = evt.result.text
+                        self.update_text.emit("recognizing", evt.result.text, None)
 
-        def recognized_callback(evt):
-            if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
-                with self.lock:
-                    final_text = evt.result.text
-                    if final_text.strip():
-                        print(f"최종 결과: {final_text}")
-                        word_timestamps = self._extract_word_timestamps(evt.result)
-                        source_lang = self.speech_language.split('-')[0]
-                        translated = translate_text(final_text, source_lang=source_lang, target_lang=self.translation_language)
-                        print(f"번역 결과: {translated}\n")
-                        self.update_text.emit("recognized", f"{final_text}\n{translated}", word_timestamps)
-                        self.current_transcript[0] = ""
+            def recognized_callback(evt):
+                if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
+                    with self.lock:
+                        final_text = evt.result.text
+                        if final_text.strip():
+                            print(f"최종 결과: {final_text}")
+                            word_timestamps = self._extract_word_timestamps(evt.result)
+                            source_lang = self.speech_language.split('-')[0]
+                            translated = translate_text(final_text, source_lang=source_lang, target_lang=self.translation_language)
+                            print(f"번역 결과: {translated}\n")
+                            self.update_text.emit("recognized", f"{final_text}\n{translated}", word_timestamps)
+                            self.current_transcript[0] = ""
 
-        self.recognizer.recognizing.connect(recognizing_callback)
-        self.recognizer.recognized.connect(recognized_callback)
-        self.recognizer.start_continuous_recognition()
-        print(f"\n=== STT 설정 정보 ===\n음성 인식 언어: {self.speech_language}\n번역 언어: {self.translation_language}\n단어별 타임스탬프: 활성화\n===================\n")
+            self.recognizer.recognizing.connect(recognizing_callback)
+            self.recognizer.recognized.connect(recognized_callback)
+            
+            # Handle connection errors
+            def canceled_callback(evt):
+                if evt.reason == speechsdk.CancellationReason.Error:
+                    print(f"Speech recognition error: {evt.error_details}")
+                    self.stt_failed.emit(f"STT error: {evt.error_details}")
+                    self.stt_enabled = False
+            
+            self.recognizer.canceled.connect(canceled_callback)
+            
+            self.recognizer.start_continuous_recognition()
+            print(f"\n=== STT 설정 정보 ===\n음성 인식 언어: {self.speech_language}\n번역 언어: {self.translation_language}\n단어별 타임스탬프: 활성화\n===================\n")
+        except Exception as e:
+            print(f"STT runtime error: {e}")
+            self.stt_enabled = False
+            self.stt_failed.emit(f"STT runtime error: {str(e)}")
 
     def stop(self):
         self.running = False
-        if hasattr(self, 'recognizer'): self.recognizer.stop_continuous_recognition_async()
+        if self.recognizer and self.stt_enabled: 
+            try:
+                self.recognizer.stop_continuous_recognition_async()
+            except: pass
         self.executor.shutdown(wait=False)
 
 class SpeakerHandler:
@@ -587,7 +625,7 @@ class AudioProcessor(QThread):
     
     def add_chunk(self, audio_data):
         if self._paused: return
-        if self.stt_worker:
+        if self.stt_worker and self.stt_worker.stt_enabled:
             pcm_data = (audio_data * 32767).astype(np.int16).tobytes()
             self.stt_worker.process_audio(pcm_data)
         self._add_buf(audio_data)
@@ -774,7 +812,7 @@ class TranscriptionWindow(QMainWindow):
         self.text_edit = QTextEdit()
         self.text_edit.setReadOnly(True)
         self.text_edit.setFont(QFont("Arial", 15))
-        self.text_edit.setPlaceholderText("waiting...")
+        self.text_edit.setPlaceholderText("waiting... (STT may be disabled if Azure is not configured)")
         self.text_edit.setAcceptRichText(True)
         layout.addWidget(self.text_edit)
         self.current_recognizing_text = ""
@@ -1363,14 +1401,23 @@ class MainWindow(QMainWindow):
         self.is_recording = False
         self.visualization_window = self.transcription_window = self.pre_recording_window = None
         self.models_loaded = {"encoder": False, "vad": False}
+        self.stt_enabled = False
         self.spk_handler.set_embedding_callback(self._on_embeddings_updated)
         self.spk_handler.set_speaker_changed_callback(self._on_speaker_changed)
         self._setup_ui()
         QTimer.singleShot(500, self._init_app)
     
     def _on_speaker_changed(self, speaker_id):
-        if self.stt_worker: self.stt_worker.set_current_speaker(speaker_id)
+        if self.stt_worker and self.stt_worker.stt_enabled: self.stt_worker.set_current_speaker(speaker_id)
         if self.transcription_window: self.transcription_window.set_current_speaker(speaker_id)
+    
+    def _on_stt_failed(self, error_msg):
+        self.stt_enabled = False
+        if "waiting..." in self.status_label.text():
+            self.status_label.setText(f"Ready (STT disabled: {error_msg})")
+        # Update transcription window placeholder if it exists
+        if self.transcription_window:
+            self.transcription_window.text_edit.setPlaceholderText(f"STT disabled: {error_msg}")
     
     def _get_audio_devices(self):
         try:
@@ -1507,10 +1554,12 @@ class MainWindow(QMainWindow):
             self.tl_manager.resume_timeline()
             if self.audio_capture: self.audio_capture.resume()
             if self.audio_proc: self.audio_proc.resume()
-            if self.stt_worker: self.stt_worker.start_stt_with_timeline_sync()
+            if self.stt_worker and self.stt_worker.stt_enabled: 
+                self.stt_worker.start_stt_with_timeline_sync()
             self.is_recording = True
             self.start_pause_btn.setText("Pause")
-            self.status_label.setText("Recording... (Timeline + STT)")
+            stt_status = " + STT" if (self.stt_worker and self.stt_worker.stt_enabled) else " (STT disabled)"
+            self.status_label.setText(f"Recording... (Timeline{stt_status})")
         else:
             self.tl_manager.pause_timeline()
             if self.audio_capture: self.audio_capture.pause()
@@ -1613,9 +1662,15 @@ class MainWindow(QMainWindow):
         self.vad_processor = SileroVAD(device, VAD_THRESH)
         self.vad_processor.model_loaded.connect(self._on_vad_loaded)
         self.vad_processor.start()
+        
+        # Initialize STT worker (will handle its own errors)
         self.stt_worker = STTWorker(self.tl_manager)
+        self.stt_worker.stt_failed.connect(self._on_stt_failed)
         self.stt_worker.start()
-        self.status_label.setText("Loading models... (Encoder + VAD + STT)")
+        self.stt_enabled = self.stt_worker.stt_enabled
+        
+        stt_status = "STT" if self.stt_enabled else "STT disabled"
+        self.status_label.setText(f"Loading models... (Encoder + VAD + {stt_status})")
     
     def _on_encoder_loaded(self):
         self.models_loaded["encoder"] = True
