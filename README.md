@@ -49,7 +49,7 @@ This project serves as a demo and example code showcasing how to implement a rea
     It's recommended to install PyTorch according to your system environment (CUDA support).
     *   **CPU version:**
         ```bash
-        pip install torch torchaudio soundcard numpy PyQt6 scikit-learn matplotlib speechbrain
+        pip install torch torchaudio soundcard numpy PyQt6 scikit-learn matplotlib speechbrain azure-cognitiveservices-speech
         ```
     *   **GPU (CUDA) version:** (if you have NVIDIA GPU)
         Check the installation command for your CUDA version on the [PyTorch official website](https://pytorch.org/get-started/locally/).
