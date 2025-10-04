@@ -158,3 +158,25 @@ Cosine similarity-based classification may not effectively distinguish speakers 
 
 ### Robustness
 Due to the above reasons, this is a demo version that is not perfectly 'robust' against various exceptional situations.
+
+## Citations
+
+If you use `pyannote.audio` please use the following citations:
+
+```bibtex
+@inproceedings{Plaquet23,
+  author={Alexis Plaquet and Hervé Bredin},
+  title={{Powerset multi-class cross entropy loss for neural speaker diarization}},
+  year=2023,
+  booktitle={Proc. INTERSPEECH 2023},
+}
+```
+
+```bibtex
+@inproceedings{Bredin23,
+  author={Hervé Bredin},
+  title={{pyannote.audio 2.1 speaker diarization pipeline: principle, benchmark, and recipe}},
+  year=2023,
+  booktitle={Proc. INTERSPEECH 2023},
+}
+```
